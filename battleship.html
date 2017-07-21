@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.12.4/jquery.min.js"></script>
+    <script>
+        //работал с classname - потому что полифил под ie8 большой, неадекватно задаче
+        //расширил класс math, будут нужны случайные целые числа в диапазоне
+        Math.randomInt = function (a, b) {
+            return Math.floor(Math.random() * (b - a + 1) + a);
+        };
+//полифил для indexOf с mdn
+if (!Array.prototype.indexOf)
+{
+  Array.prototype.indexOf = function(elt /*, from*/)
+  {
+    var len = this.length >>> 0;
+
+    var from = Number(arguments[1]) || 0;
+    from = (from < 0)
+         ? Math.ceil(from)
+         : Math.floor(from);
+    if (from < 0)
+      from += len;
+
+    for (; from < len; from++)
+    {
+      if (from in this &&
+          this[from] === elt)
+        return from;
+    }
+    return -1;
+  };
+}
+
+        var GRID_SIZE = 10, IE8=''; //x10 размерность поля
+        if (!document.addEventListener){//этого еще нет в 8, проверю по нему
+            IE8 = 'no-svg'
+        }
+ 
+        function Grid(selector, name) {
+            this.field = document.querySelector(selector);//храним обертку соответствующего поля, нужно
+            this.score = 0;//очки, 20-победа
+            this.name = name || 'Компьютер';//имя пользователя|компьютер
+            this.ships = [];//хранит сгенерированные корабли
+            this.step_counter_div = document.querySelector('.step_counter');//место для вывода данных "кто ходит"
+            this.axis = [];//[0,[x,y],0] - первое значение-ось x=0|y=1(по ней произошло попадание), 3е-значение - подтверждение что корабль на этой оси 
+
+            //валидирует на адекватность расположения согласно общепринятым правилам
+            this.ship_is_valid = function (size, is_horiz, x, y) {
+                if (is_horiz) {
+                    for (var i = Math.max(0, x - 1); i <= Math.min(GRID_SIZE - 1, x + 1); i++) {
+                        for (var j = Math.max(0, y - 1); j <= Math.min(GRID_SIZE - 1, y + size); j++) {
+                            if (this.matrix[i][j] == '1') {
+                                return false;
+                            }
+                        }
+                    }
+                    return true;
+                } else {
+                    for (var i = Math.max(0, x - 1); i <= Math.min(GRID_SIZE - 1, x + size); i++) {
+                        for (var j = Math.max(0, y - 1); j <= Math.min(GRID_SIZE - 1, y + 1); j++) {
+                            if (this.matrix[i][j] == '1') {
+                                return false;
+                            }
+                        }
+                    }
+                    return true;
+                }
+            };
+
+            //закрашивает добитые корабли|рекурсивно
+            this.painter = function (field, x, y, cl) {
+                if (field.querySelector('[data-id="' + x + '-' + y + '"]').className.match(/hit/)) {
+                    field.querySelector('[data-id="' + x + '-' + y + '"]').className = field.querySelector('[data-id="' + x + '-' + y + '"]').className.replace(/hit/,'')
+                    field.querySelector('[data-id="' + x + '-' + y + '"]').className +=' '+cl;
+                    for (var i = Math.max(0, x - 1); i <= Math.min(9, x + 1); i++) {
+                        for (var j = Math.max(0, y - 1); j <= Math.min(9, y + 1); j++) {
+                            this.painter(field, i, j, cl);
+                        }
+                    }
+                }else{
+                    field.querySelector('[data-id="' + x + '-' + y + '"]').className +=' no';//класс даст знать компьютеру что тут корабля точно нет
+                }
+            }
+
+            //проверяет добит ли корабль
+            this.ship_is_done = function (x, y) {
+                for (var i = 0; i < this.ships.length; i++) {
+                    for (var j = 0; j < this.ships[i].length; j++) {
+                        if (this.ships[i][j][0] == x && this.ships[i][j][1] == y) {
+                            this.ships[i].splice(this.ships[i].indexOf(this.ships[i][j]), 1)
+                            if (this.ships[i].length) {
+                                return false
+                            } else {
+                                return true
+                            }
+                        }
+                    }
+                }
+            };
+
+            //поворачиваем стрелку к активному игроку и выводим кто ходит
+            this.step_counter = function(ai){
+                if (ai){
+                    this.step_counter_div.className='step_counter cpu';
+                    this.step_counter_div.innerText = 'Ход ' + cpu.name;
+                }else{
+                    this.step_counter_div.className='step_counter user';
+                    this.step_counter_div.innerText = 'Ход ' + user.name;
+                }
+            };
+
+            //функция стрельбы|доп проверка на то стреляет пользователь или ai
+            this.fire = function (el, cpu) {
+                //debugger
+                var cpu = !!cpu, x, y;
+                if (cpu) {
+                    $el = $(this.field).find(el);
+                } else {
+                    $el = $(el);
+                }
+                if ($el.hasClass('miss') || $el.hasClass('hit') || $el.hasClass('done')) {//проверяем чтоб пользователь не делал лишних ходов
+                    return false;
+                }
+                if (!!$el.data('ship')) {
+                    this.score += 1;
+                    $el.addClass('hit');
+                    this.step_counter(cpu);
+                    x = + +$el.data('id').match(/\d+/g)[0];
+                    y = + +$el.data('id').match(/\d+/g)[1];
+                    this.matrix[x][y] = '0';
+                    if (this.ship_is_done(x, y)) {
+                        this.axis = [];
+                        this.painter(this.field, x, y, 'done');
+                    }else{
+                        if(this.axis && this.axis.length>1){
+                            this.axis[2]+=1;
+                        }else if (this.axis){
+                            this.axis=[0,[x,y],0]
+                        }
+                    }
+                    if (this.score == 20) {//проверяем условие победы
+                        alert(this.name + ' выиграл!');
+                        return true;
+                    }
+                    if (cpu) {
+                        window.cpu.shot_calculation(x,y);
+                    }
+                    return true;
+                } else {
+                    $el.addClass('miss');
+                    this.step_counter(!cpu);
+                    if (!cpu) {
+                        window.cpu.shot_calculation();
+                    }
+                }
+            };
+
+            //проверяет на адекватность выстрела
+            this.correct_shot = function (x, y) {
+                var el = this.field.querySelector('[data-id="' + x + '-' + y + '"]');
+                if (el.className.match(/hit/) || el.className.match(/miss/) || el.className.match(/no/)) {//className case ie8
+                    return false;
+                }
+                return true;
+            };
+
+            //выбирает клетку для обстрела
+            this.shot_calculation = function () {//оценка ситуации, подбор хода
+                    if(this.axis.length>1){
+                        if(this.axis[2]==0){//случай когда еще не определили на какой оси корабль
+                            if (this.correct_shot(this.axis[1][0],  Math.min(9,this.axis[1][1]+1))) {
+                                if (this.fire('[data-id="' + this.axis[1][0] + '-' + +(Math.min(9,this.axis[1][1]+1)) + '"]', true))
+                                    this.axis[0]=1;
+                                return
+                            }else if (this.correct_shot(this.axis[1][0],  Math.max(0,this.axis[1][1]-1))){
+                                if (this.fire('[data-id="' + this.axis[1][0] + '-' + +(Math.max(0,this.axis[1][1]-1)) + '"]', true))
+                                    this.axis[0]=1;
+                                return
+                            }else if (this.correct_shot(Math.min(9,this.axis[1][0]+1),  this.axis[1][1])) {
+                                if (this.fire('[data-id="' + +(Math.min(9,this.axis[1][0]+1)) + '-' + this.axis[1][1] + '"]', true))
+                                    this.axis[0]=0;
+                                return
+                            }else if (this.correct_shot(Math.max(0,this.axis[1][0]-1),  this.axis[1][1])) {
+                                if (this.fire('[data-id="' + +(Math.max(0,this.axis[1][0]-1)) + '-' + this.axis[1][1] + '"]', true))
+                                    this.axis[0]=0;
+                                return
+                            }
+                        }else{//случай когда определили на какой оси корабль
+                            if(this.axis[0]==0){
+                                for (var k = 1; k < 3; k++){
+                                    if (this.correct_shot(Math.min(9,this.axis[1][0]+k),  this.axis[1][1])) {
+                                        this.fire('[data-id="' + +(Math.min(9,this.axis[1][0]+k)) + '-' + this.axis[1][1] + '"]', true);
+                                        return
+                                    }else if (this.correct_shot(Math.max(0,this.axis[1][0]-k),  this.axis[1][1])) {
+                                        this.fire('[data-id="' + +(Math.max(0,this.axis[1][0]-k)) + '-' + this.axis[1][1] + '"]', true);
+                                        return
+                                    }
+                                }
+                            }else{
+                                for (var k = 1; k < 3; k++){
+                                    if (this.correct_shot(this.axis[1][0],  Math.min(9,this.axis[1][1]+k))) {
+                                        this.fire('[data-id="' + this.axis[1][0] + '-' + +(Math.min(9,this.axis[1][1]+k)) + '"]', true);
+                                        return
+                                    }else if (this.correct_shot(this.axis[1][0],  Math.max(0,this.axis[1][1]-k))) {
+                                        this.fire('[data-id="' + this.axis[1][0] + '-' + +(Math.max(0,this.axis[1][1]-k)) + '"]', true);
+                                        return
+                                    }
+                                }
+                            }
+                        }
+                    }else{//можно делать случайный выстрел
+                    do {
+                        x = Math.randomInt(0, 9);
+                        y = Math.randomInt(0, 9);
+                    } while (!this.correct_shot(x, y))
+                    this.fire('[data-id="' + x + '-' + y + '"]', true);
+                }
+            /*
+            var x, y;
+                do {
+                    x = Math.randomInt(0, 9);
+                    y = Math.randomInt(0, 9);
+                } while (!this.correct_shot(x, y))
+                this.fire('[data-id="' + x + '-' + y + '"]', true);*/
+            };
+
+            //выводим поле в html
+            this.generate_cells = function () {
+                var el = document.createElement('span')
+                for (var i = 0; i < GRID_SIZE; i++) {
+                    for (var j = 0; j < GRID_SIZE; j++) {
+                        el.innerHTML = '<div class="cell '+IE8+'" data-id=' + i + '-' + j + ' data-ship=' + this.matrix[i][j] + '></div>';
+                        this.field.appendChild(el.firstChild)
+                        el.innerHTML = '';
+                    }
+                }
+            };
+ 
+            //включает в себя валидность возможного корабля и непосредственно заполнение матрицы поля + заполнение массива кораблей координатами
+            this.set_ship_by_size = function (size) {
+                var is_horiz = Math.randomInt(0, 99999) % GRID_SIZE == 0;
+                var x = 0;
+                var y = 0;
+                do {
+                    do {
+                        x = Math.randomInt(0, 99999) % GRID_SIZE;
+                    } while (!is_horiz && x > GRID_SIZE - size);
+                    do {
+                        y = Math.randomInt(0, 99999) % GRID_SIZE;
+                    } while (is_horiz && y > GRID_SIZE - size);
+                } while (!this.ship_is_valid(size, is_horiz, x, y));
+                var arr = [];
+                if (is_horiz) {
+                    for (var j = y; j < y + size; j++) {
+                        this.matrix[x][j] = '1';
+                        arr.push([x, j]);
+                    }
+                    this.ships.push(arr)
+                } else {
+                    for (var i = x; i < x + size; i++) {
+                        this.matrix[i][y] = '1';
+                        arr.push([i, y])
+                    }
+                    this.ships.push(arr)
+                }
+            };
+
+            //функция создает пустую сетку, запускается сразу так как сетка нам в любом случае будет нужна
+            this.matrix = function () {
+                var arr = new Array();
+                for (var i = 0; i < GRID_SIZE; i++) {
+                    arr[i] = new Array();
+                    for (var j = 0; j < GRID_SIZE; j++) {
+                        arr[i][j] = '0';//0 - нет корабля|1 - в клетке фрагмент корабля
+                    }
+                }
+                return arr;
+            }.call(this);
+
+            //запускает серию прицедур приводящих к заполнению сетки кораблями и сохранению их положения
+            this.generate_ships = function () {
+                for (var i = 0; i < 1; i++) {
+                    this.set_ship_by_size(4, this.matrix);
+                }
+                for (var i = 0; i < 2; i++) {
+                    this.set_ship_by_size(3, this.matrix);
+                }
+                for (var i = 0; i < 3; i++) {
+                    this.set_ship_by_size(2, this.matrix);
+                }
+                for (var i = 0; i < 4; i++) {
+                    this.set_ship_by_size(1, this.matrix);
+                }
+                this.generate_cells();
+            }.call(this);
+        };
+    </script>
+    <style>
+        #computer_field {
+            width: 320px;
+            float: left;
+            background: #12caca;
+        }
+
+        #human_field {
+            width: 320px;
+            float: left;
+            background: #12caca;
+        }
+
+        .cell {
+            height: 30px;
+            width: 30px;
+            border: 1px solid #000;
+            display: inline-block;
+            float: left;
+        }
+
+        .wrapper {
+            display: inline-block;
+            left: 24%;
+            position: absolute;
+        }
+
+        .step_counter {
+            margin: auto 20px;
+            float: left;
+            display:inline-block;
+            position: relative;
+            background: #A0A0A0;
+            width: 150px;
+            height: 50px;
+            line-height: 50px;
+            color:#fff;
+            text-align: center;
+            -moz-border-radius:8px;
+            -webkit-border-radius:8px;
+            border-radius:8px;
+        }
+        .step_counter::after{
+            content: '';
+            position: absolute;
+            width: 0;
+            height: 0;
+            border: 10px solid;
+        }
+        .step_counter.cpu::after{
+            border-color: transparent transparent transparent #A0A0A0;
+            top: 50%;
+            left: 100%;
+            margin-top: -10px;
+        }
+        .step_counter.user::after{
+            border-color: transparent #A0A0A0 transparent transparent;
+            top: 50%;
+            right: 100%;
+            margin-top: -10px;  
+        }
+
+        .intro, .wrapper {
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            overflow: auto;
+            white-space: nowrap;
+            text-align: center;
+        }
+
+        .intro {
+            background: #000;
+            opacity: 0.9;
+            z-index: 1;
+        }
+
+        .intro:before, .wrapper:before {
+            height: 100%;
+            display: inline-block;
+            vertical-align: middle;
+            content: '';
+        }
+
+        form, .game {
+            display: inline-block;
+            white-space: normal;
+            vertical-align: middle;
+            text-align: center;
+        }
+
+        [data-ship="1"] {
+            background: blue;
+        }
+
+        #name {
+            width: 200px;
+            padding: 20px;
+            font-size: 15px;
+            border: 1px solid black;
+            border-radius: 2px;
+        }
+
+        .miss {
+            background: white !important;
+        }
+
+        .hit {
+            background: yellow !important;
+        }
+
+        #human_field .cell, [data-ship="0"] {
+            background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='30' height='30' viewBox='0 0 1000 1000'><polygon style='fill:%23E4F2EF' points='1000 802.8 1000 1007 0 1007 0 802.8 57.1 795.2 143.4 746.7 204 678.5 255.5 566.4 293.4 471 334.3 387.6 370.7 337.6 437.4 283.1 500 254.3 569.2 237.6 652.5 237.6 725.2 252.8 790.4 281.6 832.8 313.4 887.4 380.1 828.3 401.3 766.2 458.8 734.3 520.8 725.2 601.3 748 671 799.5 739.2 861.6 777 949.5 801.3 '/><path style='fill:%235DACAF' d='M631.9 231.2c-116.5-6.4-239.1 43.5-314.1 164.4l0 0c-42.3 80.6-68.2 174.8-112.2 250.6C162.4 721.1 103.7 778.3-7.6 788.8c-15.5 1.6-12.9 23.4 2.6 21.8 119.1-12.1 185.6-75.7 231.3-154.7 44.9-78.2 70.8-172.4 112.2-250.6C408.3 291.6 522.3 246.5 631 252.1c95 4.9 184.7 50.8 236.5 124.9C752.7 414.1 700.1 518 719 614.7c19 101.5 115.6 194.2 287.4 194.2 15.5 0 15.5-21.8 0-21.8 -163.1 0-247.7-84.6-265-175.7 -17.3-91.8 32.8-190.2 147.6-220 7.8-1.6 11.2-9.7 6.9-15.3C841.6 289.2 739.8 236 631.9 231.2L631.9 231.2z'/></svg>") no-repeat;
+            /*background: purple*/
+        }
+        #human_field .cell.no-svg, [data-ship="0"].no-svg, .no-svg {
+            background: #12caca;
+        }
+
+        #human_field .no, .no{
+            background: grey !important;
+        }
+
+        #human_field .done, #computer_field .done {
+            background-color: red !important;
+        }
+
+        .greeting {
+            color: white;
+            margin-bottom: 20px;
+            font-size: 20px;
+        }
+
+        .fleft {
+            float: left;
+        }
+
+        .legend_li {
+            list-style-type: none;
+            overflow: auto;
+            max-width: 210px
+        }
+
+        .help_text {
+            padding: 7px 0px;
+            float: left;
+        }
+
+        .legend {
+            max-width: 250px;
+        }
+
+        .man {
+            position: absolute;
+        }
+
+        #restart, #change_name {
+            background: blue;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 3px;
+        }
+
+        #restart:focus {
+            outline: none;
+        }
+        #name.error{
+            border: 2px solid red;
+        }
+    </style>
+</head>
+<body>
+<div class='wrapper'>
+    <div class='game'>
+        <div class='fleft'>
+            <div>Поле с кораблями компьютера</div>
+            <div id='human_field'></div>
+        </div>
+        <div class='step_counter cpu'></div>
+        <div class='fleft'>
+            <div>Поле с вашими кораблями</div>
+            <div id='computer_field'></div>
+        </div>
+    </div>
+</div>
+<div id='intro' class="intro">
+    <form id='form_data' onsubmit='return getName(e)'>
+        <div class="greeting">Морской бой, введите имя, нажмите enter.</div>
+        <input id='name' placeholder='Иван Иванович'>
+    </form>
+</div>
+<div class='left man'>
+    <button id='restart'>Начать с начала.</button>
+     <button id='change_name'>Сменить имя.</button>
+    <ul class='legend'>
+        <li class='legend_li'>Легенда:</li>
+        <li class='legend_li'>
+            <div class="cell miss"></div>
+            <div class='help_text'>&nbsp;- Промах</div>
+        </li>
+        <li class='legend_li'>
+            <div class="cell hit"></div>
+            <div class='help_text'>&nbsp;- Ранил</div>
+        </li>
+        <li class='legend_li'>
+            <div class="cell done"></div>
+            <div class='help_text'>&nbsp;- Убил</div>
+        </li>
+        <li class='legend_li'>
+            <div class="cell" data-ship="1"></div>
+            <div class='help_text'>&nbsp;- Ваш корабль</div>
+        </li>
+        <li class='legend_li'>
+            <div class="cell no" data-ship="1"></div>
+            <div class='help_text'>&nbsp;- Тут точно нет корабля</div>
+        </li>
+        <li class='legend_li ie8' style='display:none'>
+            <div class="cell no-svg" data-ship="1"></div>
+            <div class='help_text'>&nbsp;- Море</div>
+        </li>
+        <br>
+        <li class='legend_li'>
+            Человек ходит первый, при попадании - делается еще выстрел
+        </li>
+    </ul>
+</div>
+</body>
+<script type="text/javascript">
+//инитим поля
+    user = new Grid('#human_field');
+    cpu = new Grid('#computer_field');
+    //задаем листнеры для действий игрока
+    $(document).ready(function() {
+        if (IE8){
+            //дадим подсказку что это все таки море
+            document.querySelector('.ie8').style.display='inline-block'
+        }
+    $('#form_data').keydown(function(event){
+    if( (event.keyCode == 13) ) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        var input = document.querySelector('#name')
+        if (input.value.length > 0){
+            user.name = input.value;
+            user.step_counter(false);
+            $('#intro').hide();
+        }else{
+            input.className=input.className+=' error';
+        }
+        return false;
+    }
+    });
+    });
+    $('#human_field').on('click', '.cell', function (e) {
+        var target = e.target || window.event.target;
+        user.fire(target);
+    });
+    $('#change_name').on('click', function (e) {
+        user.name = prompt("Введите имя", '');
+        user.step_counter(false);
+    });
+    $('#restart').on('click', function (e) {
+        document.querySelector('#human_field').innerHTML = '';
+        document.querySelector('#computer_field').innerHTML = '';
+        user = new Grid('#human_field');
+        cpu = new Grid('#computer_field');
+    });
+</script>
+</html>
